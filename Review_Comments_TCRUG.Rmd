@@ -1,0 +1,481 @@
+---
+title: 'Twin Cities R User Group: Pricing Sentiment Analysis'
+author: "Armin Kakas"
+date: "Wednesday, October 14, 2015"
+output:
+  pdf_document:
+    fig_height: 6
+    fig_width: 8
+    keep_tex: yes
+  html_document: default
+  word_document:
+    fig_height: 6
+theme: united
+---
+
+```{r "startupdata", echo = FALSE, results ='hide', warning=FALSE, message=FALSE}
+wants <- c("knitr", "caret","boot","data.table", "ggplot2",
+           "reshape2", "pander", "ggthemes", 
+           "scales", "foreign", "magrittr",
+           "tidyr", "dplyr", 'tidyr', "stringr", 'qdap', 'gridExtra')
+has   <- wants %in% rownames(installed.packages())
+if(any(!has)) install.packages(wants[!has])
+lapply(wants, library, character.only=T)
+
+
+opts_chunk$set(echo=TRUE, warning=FALSE, message=FALSE,
+               results="asis", prompt=FALSE, error=FALSE,
+               fig.width=8, fig.height=6)
+
+
+setwd("~/Documents/Analytics - R-Python-etc./Presentations/TCRUG Oct 2015 Sentiment Analysis")
+```
+
+
+# Objective   
+Written customer comments and reviews on company websites can be a genuine expression of their sentiment on various product attributes. Retailer websites provide a wealth of information related to this, and with some simple text analytics, we can evaluate:  
+- How customer's feel about a product's price over time?   
+- What customer think about product quality?   
+- How recent shifts in pricing strategy influenced consumer price perception?  
+- How recent shifts in advertising strategy influenced consumer perception of quality?  
+- How to segment products based on text mining outcomes?   
+- What pricing strategies to further pursue based on our text analysis?    
+
+I believe that NLP is a much more powerful way of gauging what customers think and feel as opposed to consumer satisfaction scores (or **NPS scores** for that matter). Below, we will do some very simple strategies in analyzing consumer reviews for appr. 80 Walmart products with the ultimate goal of measuring **product level pricing sentiment scores on a daily basis**. 
+
+## Our data
+Obtrained product reviews and ratings for appr. 100 items. I used Python's **Beautiful Soup** package that works quite elegantly. The attributes are:
+1. **date**: date of the review   
+2. **rating**: the rating the customer gave to the particular item on a particular day   
+3. **comment**: the actual text of the written customer comment   
+4. **wmt_product_name**: the name of the product displayed on the Walmart website   
+5. **wmt_product_id**: the Walmart product id associated with the product   
+
+**Data and code can be found on https://github.com/KakasA09**
+
+## Keywords   
+
+These are pricing keyword (see below). We will parse the Walmart customer comments to see if they include one of these keywords. It is certainly not a bullet-proof way of delineating **pricing-related** comments, and robust NLP methods are needed - *pained to admit, but Python is best for that*.  
+
+```{r "P1"}
+load('comments.Rda')
+load('pricing_sentences.Rda')
+keywords <- read.csv('pricing_keywords.csv')
+keywords <- as.character(keywords$keyword)
+
+keywords[1:5]
+```
+
+
+## Parsing pricing-related comments   
+In the below, we are doing three things:  
+1. Only keep the customer comments that contain one of our **pricing keywords**.   
+2. Split the comments into sentences using the **qdap** package's **sentSplit** function. *(imagine splitting a comment comprised of 5 sentences, thus 1 row of data becoming 5 rows).    
+3. We repeate the earlier exercise by taking  a look at our *sentences*, and only keeping the ones that have one or more of the **pricing keywords**. We are, in essence, keeping **pricing-related sentences** only. Keep in mind, we still retained the product, date and rating fields.    
+
+Now, ideally we would go a step further, and keep pricing-related **ngrams** only. Reason is simple: a customer can make a long statement (sentence), and while the overall sentiment of the statement may be highly negative, her sentiment about the product's price could have been quite positive..e.g.: *"Product quality was awful, but Walmart's prices are the best!"*
+
+```{r "P2", eval=FALSE, echo=FALSE}
+################# Don't run this
+#parse out pricing only comments
+options(width = 1000)
+comments = tbl_df(comments) %>% select(wmt_product_id, date, comment)
+comments = comments[complete.cases(comments$comment),]
+
+pricing_comments1 <- comments  %>% mutate(keyword_present = grepl(paste(keywords,collapse=" | "), comment, ignore.case = TRUE)) %>%
+    filter(keyword_present == TRUE) %>% select(-keyword_present)
+
+pricing_comments1 = data.frame(pricing_comments1)
+
+#split comments to form unique sentences
+pricing_sentences = sentSplit(pricing_comments1, "comment")
+
+#save(pricing_sentences, file = 'pricing_sentences.Rda')
+#################
+
+
+load('pricing_sentences.Rda')
+
+pricing_sentences <- tbl_df(pricing_sentences)  %>%
+    mutate(keyword_present = grepl(paste(keywords,collapse="|"), comment, ignore.case = TRUE)) %>%
+    filter(keyword_present == TRUE) %>% 
+    select(wmt_product_id, date, comment) 
+
+
+#ensure there is complete data
+pricing_sentences <- na.omit(pricing_sentences)
+
+```
+
+
+## Creating customized dictionaries for negative, positive, negation words, amplifiers and de-amplifiers
+
+Since our approach for measuring customers' **pricing sentiment score** is a slightly enhanced version of **lexicon-based scoring**, we will make it a bit more robust by adding industry-specific terms. 
+
+```{r "P3", eval=FALSE, echo=FALSE}
+negative_words <- c(negative.words, "bounty",	"costly",	"excessive",	"exorbitant",	"expense",
+                    "extravagant",	"highpriced",	"overpriced",	"pricey",	"steep",	
+                    "stiff",	"worthless",	"expensive",	"overcharge", "expensive",	
+                    "pricey",	"high")
+
+#take out the word "cheap" from qdap's negative words dictionary
+#cheap is good in pricing (unless it talks about product quality)
+negative_words <- negative_words[!negative_words %in% c("cheap")]
+
+#augment qdap's positive words dictionary
+positive_words <- c(positive.words, "cheap",	"cheaper",	"cheapo",	"inexpensive",
+                    "lowcost",	"lowpriced",	"worth",	"worthiness", "value",	"well",	
+                    "cheaper",	"inexpensive",	"best",	"nice",	"excellent",
+                    "less",	"recommend", "reasonable",	"happy",	"decent",	"awesome",	"deal")
+
+#augment qdap's aplification words
+amplification_words <- c(amplification.words, "enough", "too")
+
+deamplification_words <- c(deamplification.words)
+
+#ensure there is no duplication
+positive_words <- positive_words[!positive_words %in% negative_words]
+
+positive_words <- positive_words[!positive_words %in% amplification_words]
+
+positive_words <- positive_words[!positive_words %in% deamplification_words]
+
+#augment qdap's negation words
+negation_words <- c(negation.words, "haven't", "hadn't", "cannot")
+
+pos_negative_words <- sentiment_frame(positive_words, negative_words)
+```
+
+## Sentiment scoring with parallelization  
+
+In the below, we will use the versatile **qdap** package to formulate **sentiment polarity scores** (constrained between +1 and -1). **Qdap** enables us to score our data by grouping factors: in our case by **product** and by **date**.   
+
+```{r "P4", eval=FALSE, echo=TRUE}
+wmt_product_list = unique(pricing_sentences$wmt_product_id)
+
+library(doMC)
+registerDoMC(cores = detectCores()-2)
+
+pricing_polarity_scores <- foreach(a = 1:length(wmt_product_list),.combine = 'rbind', 
+                                   .packages = c('dplyr', 'qdap', 'tidyr')) %dopar% {
+    
+    pricing_sentences_small <- pricing_sentences %>% 
+                    filter(wmt_product_id == wmt_product_list[a])
+    
+    pricing_polarity_small = with(pricing_sentences_small, 
+              polarity(comment, polarity.frame = pos_negative_words, 
+                       negators = negation_words, amplifiers = amplification_words,
+                          deamplifiers = deamplification_words,
+                          list(wmt_product_id, date), constrain = TRUE))
+    
+    colsplit2df(scores(pricing_polarity_small))
+    
+}
+
+pricing_polarity_scores <- tbl_df(pricing_polarity_scores) %>% 
+    select(wmt_product_id, date, ave.polarity)
+#save(pricing_polarity_scores, file = 'pricing_polarity_scores.Rda')
+```
+
+
+## Now, let's do some analysis (see comments in the code below)   
+
+```{r "P5", echo=FALSE}
+load('pricing_polarity_scores.Rda')
+
+pricing_polarity_scores$date <- as.Date(pricing_polarity_scores$date, format = "%Y-%m-%d")
+pricing_polarity_scores$wmt_product_id <- as.integer(pricing_polarity_scores$wmt_product_id)
+
+ratings_by_product_day = tbl_dt(comments) %>% select(rating, wmt_product_id, wmt_product_name, date) %>%
+                    mutate(wmt_product_name = gsub(" - Walmart.com","",wmt_product_name)) %>%
+                    group_by(wmt_product_id, wmt_product_name, date) %>%
+                        summarise(avg_rating = mean(rating, na.rm=T))
+
+
+pricing_polarity_scores = merge(pricing_polarity_scores, ratings_by_product_day, by = c('wmt_product_id','date'), all.x = T)
+
+#what are the products with the best pricing sentiment scores in the second half of this year?
+
+second_half_ranking = pricing_polarity_scores %>% filter(year(date) >= 2015 & month(date) > 6) %>%
+                    group_by(wmt_product_id, wmt_product_name) %>% 
+                    summarise(avg_polarity = mean(ave.polarity, na.rm = T),
+                              avg_rating = mean(avg_rating, na.rm = T)) 
+
+best_this_year = head(data.frame(second_half_ranking) %>% arrange(desc(avg_polarity)), n = 10)
+worst_this_year = tail(data.frame(second_half_ranking) %>% arrange(desc(avg_polarity)), n = 10)                             
+
+options(width = 2000)
+best_pricing_comments = pricing_sentences[pricing_sentences$wmt_product_id %in% best_this_year$wmt_product_id, ]
+worst_pricing_comments = pricing_sentences[pricing_sentences$wmt_product_id %in% worst_this_year$wmt_product_id, ]
+```
+
+
+```{r "P6", echo=FALSE}
+library('RColorBrewer')
+#library('devtools') #if not installed, do that obviously
+#devtools::install_version("httr", version="0.6.0", repos="http://cran.us.r-project.org")
+#A restart of R might be necessary if you previously had httr installed.
+library('httr')
+library("wordcloud")
+library("tm")
+library('stringr')
+
+
+#remove words with '@' symbol
+RemoveAtPeople <- function(tweet) {
+    gsub("@\\w+", "", tweet)
+}
+
+#remove URLs
+removeURL <- function(x) gsub("http[[:alnum:][:punct:]]*", "", x)
+
+
+#for Macs, ensure the encoding works
+convert_type <- function(x) iconv(x, to='UTF-8-MAC', sub='byte')
+
+#don't pay attentiont to the object names...reusing from prior code (too lazy)
+
+tweets_text_pre <- as.character(best_pricing_comments$comment)
+
+tweets_text_pre <- as.vector(sapply(tweets_text_pre, RemoveAtPeople))
+
+tweets_text_pre <- as.vector(sapply(tweets_text_pre, removeURL))
+
+
+tweets_text_post <- as.character(worst_pricing_comments$comment)
+
+tweets_text_post <- as.vector(sapply(tweets_text_post, RemoveAtPeople))
+
+tweets_text_post <- as.vector(sapply(tweets_text_post, removeURL))
+
+#create corpus
+r_stats_text_corpus <- Corpus(VectorSource(tweets_text_pre))
+
+r_stats_text_corpus_post <- Corpus(VectorSource(tweets_text_post))
+
+#if you get the below error
+#In mclapply(content(x), FUN, ...) :
+#  all scheduled cores encountered errors in user code
+#add mc.cores=1 into each function
+
+#run this step if you get the error:
+#(please break it!)' in 'utf8towcs'
+
+r_stats_text_corpus <- tm_map(r_stats_text_corpus, 
+                              content_transformer(function(x) iconv(x, to='UTF-8-MAC', sub='byte')), 
+                              mc.cores=1)
+
+r_stats_text_corpus_post <- tm_map(r_stats_text_corpus_post, 
+                                   content_transformer(function(x) iconv(x, to='UTF-8-MAC', sub='byte')), 
+                                   mc.cores=1)
+
+#remove certain symbols, stop words, etc. from our tweets text
+toSpace <- content_transformer(function(x, pattern) gsub(pattern, " ", x))
+r_stats_text_corpus <- tm_map(r_stats_text_corpus, toSpace, "/|@|\\|")
+r_stats_text_corpus_post <- tm_map(r_stats_text_corpus_post, toSpace, "/|@|\\|")
+
+#convert all words to lowercase...use "mc.cores" argument for macs only
+r_stats_text_corpus <- tm_map(r_stats_text_corpus, content_transformer(tolower), mc.cores=1)
+r_stats_text_corpus_post <- tm_map(r_stats_text_corpus_post, content_transformer(tolower), mc.cores=1)
+
+#remove numbers
+r_stats_text_corpus <- tm_map(r_stats_text_corpus, removeNumbers, mc.cores=1)
+r_stats_text_corpus_post <- tm_map(r_stats_text_corpus_post, removeNumbers, mc.cores=1)
+
+#remove punctuations
+r_stats_text_corpus <- tm_map(r_stats_text_corpus, removePunctuation, mc.cores=1)
+r_stats_text_corpus_post <- tm_map(r_stats_text_corpus_post, removePunctuation, mc.cores=1)
+
+#remove english stopwords ("useless" and commong words like 'for', 'are', etc.)
+r_stats_text_corpus <- tm_map(r_stats_text_corpus, removeWords, stopwords("english"), mc.cores=1)
+r_stats_text_corpus_post <- tm_map(r_stats_text_corpus_post, removeWords, stopwords("english"), mc.cores=1)
+
+#remove tailored words we specify
+r_stats_text_corpus <- tm_map(r_stats_text_corpus, removeWords, c("walmart", "wal-mart"), mc.cores=1)
+r_stats_text_corpus_post <- tm_map(r_stats_text_corpus_post, removeWords, c("walmart", "wal-mart"), mc.cores=1)
+
+#let's get rid of whitespace
+r_stats_text_corpus <- tm_map(r_stats_text_corpus, stripWhitespace, mc.cores=1)
+r_stats_text_corpus_post <- tm_map(r_stats_text_corpus_post, stripWhitespace, mc.cores=1)
+
+#creating a term document matrix...this has words as rows and documents (tweets as columns)
+
+corpus <- Corpus(VectorSource(r_stats_text_corpus))
+corpus_post <- Corpus(VectorSource(r_stats_text_corpus_post))
+
+ap.tdm <- TermDocumentMatrix(corpus)
+ap.tdm.post <- TermDocumentMatrix(corpus_post)
+
+#removing sparse terms
+ap.tdm <- removeSparseTerms(ap.tdm, 0.999)
+ap.tdm.post <- removeSparseTerms(ap.tdm.post, 0.999)
+
+#####################################################################
+#####################################################################
+################### CREATING BI/TRIGRAMS ###############################
+#####################################################################
+#####################################################################
+
+require(RWeka)
+options(mc.cores=1)
+ngramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 2, max = 3))
+
+
+ngram.dm <- TermDocumentMatrix(corpus, control = list(tokenize = ngramTokenizer))
+ngram.dm <- removeSparseTerms(ngram.dm, 0.999)
+
+ngram.dm.post <- TermDocumentMatrix(corpus_post, control = list(tokenize = ngramTokenizer))
+ngram.dm.post <- removeSparseTerms(ngram.dm.post, 0.999)
+
+#####################################################################
+#####################################################################
+################### TOP WORDS / NGRAMS ##############################
+#####################################################################
+#####################################################################
+
+ap.m <- as.matrix(ap.tdm)
+ap.m.post <- as.matrix(ap.tdm.post)
+
+ap.v <- sort(rowSums(ap.m),decreasing=TRUE)
+ap.v.post <- sort(rowSums(ap.m.post),decreasing=TRUE)
+
+top_words <- data.frame(word = names(ap.v),freq=ap.v)
+top_words.post <- data.frame(word = names(ap.v.post),freq=ap.v.post)
+
+top_words <- tbl_df(top_words) %>% arrange(desc(freq))
+top_words.post <- tbl_df(top_words.post) %>% arrange(desc(freq))
+
+
+ngram.m <- as.matrix(ngram.dm)
+ngram.m.post <- as.matrix(ngram.dm.post)
+
+ngram.v <- sort(rowSums(ngram.m),decreasing=TRUE)
+ngram.v.post <- sort(rowSums(ngram.m.post),decreasing=TRUE)
+
+top_ngrams <- data.frame(word = names(ngram.v),freq=ngram.v)
+top_ngrams.post <- data.frame(word = names(ngram.v.post),freq=ngram.v.post)
+
+top_ngrams <- tbl_df(top_ngrams) %>% arrange(desc(freq))
+top_ngrams.post <- tbl_df(top_ngrams.post) %>% arrange(desc(freq))
+
+```
+
+
+## Ngrams for best pricing sentiment score products    
+
+```{r "P6b1", echo=FALSE}
+library('tagcloud')
+
+#visualizing ngrams for BEST pricing sentiment score products
+colors  <- smoothPalette(top_ngrams$freq,  brewer.pal(8, 'Dark2'))
+tagcloud(top_ngrams$word, top_ngrams$freq, sel= 1:25,col= colors, algorithm= "oval", scale.multiplier = 0.75)
+```  
+
+## Ngrams for worst pricing sentiment score products     
+
+```{r "P6b", echo=FALSE}
+#visualizing ngrams for WORST pricing sentiment score products
+colors  <- smoothPalette(top_ngrams.post$freq,  brewer.pal(8, 'Dark2'))
+tagcloud(top_ngrams.post$word, top_ngrams.post$freq, sel= 1:25,col= colors, algorithm= "oval", scale.multiplier = 0.75)
+``` 
+
+
+## Words for best pricing sentiment score products    
+
+```{r "P6c", echo=FALSE}
+#visualizing words for BEST pricing sentiment score products
+pal2 <- brewer.pal(8,"Dark2")
+wordcloud(top_words$word,top_words$freq,min.freq=2,
+          max.words=50, random.order=FALSE, rot.per=.15, colors=pal2)
+``` 
+
+
+## Words for worst pricing sentiment score products     
+
+```{r "P6d", echo=FALSE}
+#visualizing words for WORST pricing sentiment score products
+wordcloud(top_words.post$word,top_words.post$freq,min.freq=2,
+          max.words=50, random.order=FALSE, rot.per=.15, colors=pal2)
+
+```
+
+
+## Correlations between product ratings and pricing sentiment     
+
+```{r "P7", echo=FALSE}
+#let's focus on products with at least 30 days worth of pricing comments
+pricing_comments_30d = pricing_polarity_scores %>% group_by(wmt_product_id) %>% mutate(number_days = n_distinct(date)) %>%
+                                                filter(number_days > 29) %>% select(-number_days)
+
+#evaluate correlation between pricing polarity score and average rating
+rating_sentiment_correl = pricing_comments_30d %>% group_by(wmt_product_name, wmt_product_id) %>%
+                                    summarise(correlation = cor(ave.polarity, avg_rating)) 
+
+rating_sentiment_correl = tbl_df(data.frame(rating_sentiment_correl)) %>% arrange(desc(correlation))
+pander::pander(rating_sentiment_correl)
+
+```
+
+
+```{r "P7b", echo=FALSE}
+#Let's evaluate the trends for the top and bottom product in terms of correlation
+
+top_cor_prod = rating_sentiment_correl[1,]
+top_cor_prod = top_cor_prod$wmt_product_id
+top_cor_prod_df = tbl_df(pricing_polarity_scores) %>% filter(wmt_product_id == top_cor_prod)
+
+
+bottom_cor_prod = rating_sentiment_correl[dim(rating_sentiment_correl)[1],]
+bottom_cor_prod = bottom_cor_prod$wmt_product_id
+bottom_cor_prod_df = tbl_df(pricing_polarity_scores) %>% filter(wmt_product_id == bottom_cor_prod)
+```
+
+## Example of relatively strong correlation between rating and sentiment     
+
+```{r "P7d", echo=FALSE}
+sentiment_graph_top = ggplot(top_cor_prod_df, aes(date, ave.polarity)) + geom_line() +
+    scale_x_date(labels = date_format("%m-%y"),
+                     breaks = date_breaks("1 month")) + theme_economist() + 
+    labs(title = "Daily Avg. Pricing Sentiment Score for 40-in Vizio TV at Walmart", x="Month-Year",
+         y="Pricing Sentiment Score") + 
+    theme(axis.text = element_text(size = 10), axis.title = element_text(size = 10), 
+          plot.title = element_text(size = 12))
+
+
+ratings_graph_top = ggplot(top_cor_prod_df, aes(date, avg_rating)) + geom_line() +
+    scale_x_date(labels = date_format("%m-%y"),
+                 breaks = date_breaks("1 month")) + theme_economist_white() + 
+    labs(title = "Daily Avg. Customer Rating for 40-in Vizio TV at Walmart", x="Month-Year",
+         y="Avg. Product Rating") + 
+    theme(axis.text = element_text(size = 10), axis.title = element_text(size = 10), 
+          plot.title = element_text(size = 12))
+
+grid.arrange(sentiment_graph_top, ratings_graph_top, nrow=2)   
+```
+
+## Example of a weak correlation between rating and sentiment  
+
+```{r "P8", echo=FALSE}
+sentiment_graph_bot= ggplot(bottom_cor_prod_df, aes(date, ave.polarity)) + geom_line() +
+    scale_x_date(labels = date_format("%m-%y"),
+                 breaks = date_breaks("1 month")) + theme_economist() + 
+    labs(title = "Daily Avg. Pricing Sentiment Score for 40-in Samsung TV at Walmart", x="Month-Year",
+         y="Pricing Sentiment Score") + 
+    theme(axis.text = element_text(size = 10), axis.title = element_text(size = 10), 
+          plot.title = element_text(size = 12))
+
+
+ratings_graph_bot = ggplot(bottom_cor_prod_df, aes(date, avg_rating)) + geom_line() +
+    scale_x_date(labels = date_format("%m-%y"),
+                 breaks = date_breaks("1 month")) + theme_economist_white() + 
+    labs(title = "Daily Avg. Customer Rating for 40-in Samsung TV at Walmart", x="Month-Year",
+         y="Avg. Product Rating") + 
+    theme(axis.text = element_text(size = 10), axis.title = element_text(size = 10), 
+          plot.title = element_text(size = 12))
+
+
+grid.arrange(sentiment_graph_bot, ratings_graph_bot, nrow=2)   
+```
+
+
+
