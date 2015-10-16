@@ -33,25 +33,29 @@ setwd("~/Documents/Analytics - R-Python-etc./Presentations/TCRUG Oct 2015 Sentim
 
 
 # Objective   
+Below, we will do some very simple strategies in analyzing consumer reviews for roughly 80 Walmart products with the ultimate goal of measuring **product level pricing sentiment scores on a daily basis**. 
+
 Written customer comments and reviews on company websites can be a genuine expression of their sentiment on various product attributes. Retailer websites provide a wealth of information related to this, and with some simple text analytics, we can evaluate:  
-- How customer's feel about a product's price over time?   
-- What customer think about product quality?   
+- How customers feel about a product's price over time?   
+- What customer think about product quality, functionality, etc.?   
 - How recent shifts in pricing strategy influenced consumer price perception?  
 - How recent shifts in advertising strategy influenced consumer perception of quality?  
 - How to segment products based on text mining outcomes?   
-- What pricing strategies to further pursue based on our text analysis?    
+- What pricing strategies to further pursue based on our text analysis *(elasticity and revenue or margin based strategies no longer suffice)*?    
 
-I believe that NLP is a much more powerful way of gauging what customers think and feel as opposed to consumer satisfaction scores (or **NPS scores** for that matter). Below, we will do some very simple strategies in analyzing consumer reviews for appr. 80 Walmart products with the ultimate goal of measuring **product level pricing sentiment scores on a daily basis**. 
+I believe that NLP is a much more powerful way of gauging what customers think and feel about **pricing** as opposed to consumer satisfaction scores (or **NPS scores** for that matter), which are inherently biased for purchasers vs. non-purchasers.   
+
+If you have the time, I encourage you to read the code, and make suggestions on how to better improve the methodology of evaluating pricing sentiment (which, admittedly, is quite basic below).   
 
 ## Our data
-Obtrained product reviews and ratings for appr. 100 items. I used Python's **Beautiful Soup** package that works quite elegantly. The attributes are:
+Obtained product reviews and ratings for appr. 100 items. I used Python's **Beautiful Soup** package that works quite elegantly. The attributes are:   
 1. **date**: date of the review   
 2. **rating**: the rating the customer gave to the particular item on a particular day   
 3. **comment**: the actual text of the written customer comment   
 4. **wmt_product_name**: the name of the product displayed on the Walmart website   
 5. **wmt_product_id**: the Walmart product id associated with the product   
 
-**Data and code can be found on https://github.com/KakasA09**
+**Data and code can be found on https://github.com/KakasA09/TCRUGOct2015**
 
 ## Keywords   
 
@@ -68,14 +72,14 @@ keywords[1:5]
 
 
 ## Parsing pricing-related comments   
-In the below, we are doing three things:  
-1. Only keep the customer comments that contain one of our **pricing keywords**.   
+In the below, we are doing three things:     
+1. Only keep the customer comments that contain one of our **pricing keywords**.    
 2. Split the comments into sentences using the **qdap** package's **sentSplit** function. *(imagine splitting a comment comprised of 5 sentences, thus 1 row of data becoming 5 rows).    
 3. We repeate the earlier exercise by taking  a look at our *sentences*, and only keeping the ones that have one or more of the **pricing keywords**. We are, in essence, keeping **pricing-related sentences** only. Keep in mind, we still retained the product, date and rating fields.    
 
 Now, ideally we would go a step further, and keep pricing-related **ngrams** only. Reason is simple: a customer can make a long statement (sentence), and while the overall sentiment of the statement may be highly negative, her sentiment about the product's price could have been quite positive..e.g.: *"Product quality was awful, but Walmart's prices are the best!"*
 
-```{r "P2", eval=FALSE, echo=FALSE}
+```{r "P2", eval=FALSE, echo=TRUE}
 ################# Don't run this
 #parse out pricing only comments
 options(width = 1000)
